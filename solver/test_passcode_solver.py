@@ -21,6 +21,9 @@ from passcode_solver import (
     valid_walks,
 )
 from sweep_window import concentration_profile, is_zigzag, window_walks
+from formation_window import E as formation_E
+from multi_walk_greedy import run as greedy_run
+from rectangle_tiling import solve as rectangle_solve
 
 
 def brute_force_walks(a, max_value=None, cover=0):
@@ -290,6 +293,30 @@ class SweepWindowTests(unittest.TestCase):
             self.assertEqual(len(set(w) | {0}), 11)
             self.assertEqual([abs(b - a) for a, b in zip((0,) + w[:-1], w)], list(range(1, 11)))
             self.assertTrue(set(range(-3, 4)) <= set(w) | {0})
+
+
+class FormationTests(unittest.TestCase):
+    def test_one_bit_formation_covers_a_window_only_as_a_mirror_pair(self):
+        m, labels, _ = formation_E(12, 1)
+        self.assertEqual(m, 6)                                   # perfect efficiency ...
+        self.assertTrue(all(kind == "b" for kind, _ in labels))  # ... but only with bit moves (g = -f)
+
+    def test_two_bit_formation_window_is_stuck(self):
+        for n in (10, 12, 14):
+            m, _, _ = formation_E(n, 2)
+            self.assertEqual(m, 3)
+
+    def test_rectangle_tilings(self):
+        self.assertFalse(rectangle_solve(7, 2)[0])
+        ok, rows = rectangle_solve(8, 2)
+        self.assertTrue(ok)
+        for col in range(4):
+            self.assertEqual(sorted(r[col] for r in rows), list(range(1, 9)))
+
+    def test_multi_walk_greedy_keeps_walks_distinct_and_covering(self):
+        r = greedy_run(2, 150, 0)
+        self.assertFalse(r["stuck"])
+        self.assertGreater(min(r["front"]), 20)
 
 
 if __name__ == "__main__":

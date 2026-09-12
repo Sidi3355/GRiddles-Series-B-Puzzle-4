@@ -342,3 +342,117 @@ all) can satisfy (b) would be the heart of an Ana argument for the answer 1.
   every branch eventually sweeps every interval, looks like a design problem
   rather than an impossibility; but it has resisted a quick solution and the
   finite experiments with two unreachable targets still all favour Ana.
+
+## 12. Exact reformulations (phase 3, second pass)
+
+*Doubly stochastic matrix.* Let mu be any probability measure on covering
+walks for a and A(n, v) = mu(p_n = v). Every row sums to 1 (the walk is
+somewhere at time n) and every column sums to 1 (every walk visits v exactly
+once). Ana's schedule is a partial matching M between turns n > T and values,
+and she catches mass at most sum_{(n,v) in M} A(n, v). Bob's spread
+condition of section 4 says that every such matching has weight < 1.
+
+*Every family is a formation.* Let Bob's covering walks be indexed by
+eps in {+-1}^k (k may grow with time: a walk splits when a new bit is
+introduced). Writing the sign of walk eps on turn n as a function
+sigma_n(eps) and expanding it in Walsh characters chi_S(eps) = prod_{i in S}
+eps_i, the position of walk eps at time n is
+
+    p_n(eps) = sum_S u_S(n) chi_S(eps),    u_S(n) = sum_{m <= n : sigma_m = chi_S} +- a_m,
+
+so every family is a formation over the 2^k - 1 characters (section 10 used
+only the k single-bit characters): each step moves the common part u_empty
+or exactly one "direction" u_S. Ana's guess on turn n kills the class of
+walks sitting at the guessed position; with pairwise distinct positions and
+the uniform measure the class has mass 2^-k(n), and by refining she can
+always kill an untouched class, so
+
+    a formation with pairwise distinct positions beats one guess
+        iff  sum_{n > T} 2^-k(n) < 1,
+
+the spread bound being tight for formations. With T astronomically large,
+k(n) - k(T) >= 2 log_2 (n - T) suffices (splits at times T + 2^(j/2)).
+
+*Coverage needs batch filling.* A walk fills a hole (visits a value below its
+maximum) at time n only if it stood at hole + a_n at time n-1. If on each
+turn only O(1) of the 2^k(n) walks fill a hole, each walk fills a hole at
+rate O(2^-k(n)) and, since coverage needs every walk to fill infinitely many
+holes, sum_n 2^-k(n) must diverge, which contradicts the spread condition.
+So Bob's walks must fill holes in batches: a positive fraction of the walks
+at once, standing at (their own hole) + a_n simultaneously. Walks whose
+covered sets are initial segments [1, f_eps) (plus far blocks) with
+pairwise different frontiers f_eps can do this in lockstep: positions
+f_eps + s, one common step down fills every frontier, a common step up and
+the next common step down (consecutive sizes) repeat it; the frontiers stay
+pairwise different, so the positions stay pairwise distinct, and each
+walk's far blocks are reached by its own frontier at the same time as the
+other walks reach theirs.
+
+*Lockstep cannot last: the mine lemma.* Two walks that are translates of
+each other after time s (f = g + d, d ≠ 0) cannot both cover: with V the
+set visited by both before s, g must visit every value outside V, so f
+visits (Z_{>0} \ V) + d, which meets V unless V + d ⊆ V, impossible for a
+finite nonempty V. Concretely, when the upper walk reaches max(V) + d the
+lower one is sent back to max(V). So two walks split at time s can move in
+lockstep only for a while and must from time to time move as mirror images
+(bit moves: f + g constant), exactly the alternation the greedy below finds.
+For 2^k walks the same holds for every pair, with V the values visited
+before that pair's split (which contains the initial segment covered so far
+and is therefore huge); the fixes are batch mirror phases, one per bit.
+
+## 13. Experiments on multiple covering walks
+
+`solver/formation_window.py` (steps 1..N in order, all walks from one start,
+window [-m, m] to be covered by every walk): with one bit the window is
+covered perfectly (E = N/2) but only by the mirror pair g = -f, which cannot
+be positive on one side; forcing common moves, or a second bit, leaves E
+stuck at 3-5 for all N up to 20. Local windows are the wrong yardstick for
+several walks, which cover at different places at different times, so the
+next two experiments look at the long run instead.
+
+`solver/rectangle_tiling.py`: the combinatorial part of the formation
+problem, "every branch eventually dips to every value", is solvable: rows
+{x, x + a, x + b, x + a + b} (2^k-point boxes in general) whose columns are
+permutations exist for V = 8 (k = 2) and V = 16 (k = 3), with the group
+structure x + 2 * (linear code of eps); no obstruction lives there.
+
+`solver/multi_walk_greedy.py`: Bob chooses each step size freely (every
+integer must eventually be used; the smallest unused size is forced when
+overdue), the 2^k walks must land on fresh positive values and, once all
+bits are introduced, on pairwise distinct positions; the greedy prefers
+moves that fill frontiers and holes. Results (frontier = smallest unvisited
+value, after 3000 steps for k <= 2 and 2000 for k = 3):
+
+    k = 1 (2 walks):  frontiers 1757/1759 and 1742/1761, rate 0.58 per step,
+                      no dead end; the trace alternates mirror phases
+                      (closing zig-zags around a centre) with common moves.
+    k = 2 (4 walks):  frontiers 735..1151, rate 0.25-0.38 per step, no dead end.
+    k = 3 (8 walks):  frontiers 187..328, rate 0.09-0.16 per step, no dead end.
+
+So sequences with 2, 4 and 8 covering walks at pairwise distinct positions
+exist as far as any finite experiment can tell (the exhaustive counts of
+section 7 already show early splits with both walks covering 1..10 by turn
+11). The per-walk rate halves with each bit because this greedy fills
+frontiers one walk at a time; it does not implement lockstep batch filling.
+
+## 14. Where the answer stands
+
+* 1 <= answer <= 2 is proved (Theorem 2, formalised).
+* Answer 2 is equivalent to the existence of a formation of covering walks
+  with pairwise distinct positions and sum_{n > T} 2^-k(n) < 1 (section 12),
+  which in turn requires batch hole filling. Lockstep filling gives the
+  batch, the mine lemma forces periodic mirror phases, the rectangle tilings
+  show the bookkeeping of "who dips where" has no combinatorial obstruction,
+  and the greedy shows 2, 4 and 8 such walks coexist over thousands of steps.
+  What is missing is the explicit schedule that keeps all 2^k(n) walks
+  filling in batches while k(n) grows like 2 log_2 n (the greedy's rate
+  2^-k is the round-robin regime that cannot work), with every integer used
+  once as a step; the natural design is a lockstep sweep interrupted, once
+  per bit and per cycle, by a mirror phase that repairs that bit's lag.
+* Answer 1 would need an Ana argument defeating all formations, i.e. a proof
+  that batch filling cannot be sustained with k(n) -> infinity. Nothing found
+  so far points that way; the finite "two unreachable targets" data of
+  phase 2 is explained by the horizon (a target must be reached within N
+  turns, so the walks cannot afford the lag that lockstep filling creates).
+* Assessment: the answer is 2, with the construction in reach but not
+  written; this is not yet a proof.
