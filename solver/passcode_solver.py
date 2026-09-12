@@ -68,6 +68,7 @@ import argparse
 import sys
 import time
 from collections import Counter
+from fractions import Fraction
 from typing import Dict, Iterator, List, Optional, Sequence, Set, Tuple
 
 Walk = Tuple[int, ...]          # (p_1, ..., p_N)
@@ -78,24 +79,34 @@ Schedule = Dict[int, Set[int]]  # turn n -> set of guessed values
 # Walk enumeration
 # ----------------------------------------------------------------------------
 
-def _covered(walk: Sequence[int], cover: int) -> bool:
-    return cover == 0 or set(range(1, cover + 1)) <= set(walk)
+def must_set(a: Sequence[int], first_turn: int = 2, cover: int = 0, late_cover: int = 0
+             ) -> Set[int]:
+    """Values Bob must have visited by turn N: 1..cover, plus the ``late_cover``
+    smallest values he cannot reach before turn first_turn, i.e. R+1..R+K with
+    R = a_1 + ... + a_{first_turn-1} (|p_n| <= R for n < first_turn).  The late
+    values are the finite counterpart of the targets in THEORY.md section 2."""
+    must = set(range(1, cover + 1))
+    if late_cover:
+        reach = sum(a[:max(first_turn - 1, 0)])
+        must |= set(range(reach + 1, reach + late_cover + 1))
+    return must
 
 
-def valid_walks(a: Sequence[int], max_value: Optional[int] = None, cover: int = 0
-                ) -> List[Walk]:
+def valid_walks(a: Sequence[int], max_value: Optional[int] = None, cover: int = 0,
+                must: Optional[Set[int]] = None) -> List[Walk]:
     """All sign choices for which Bob survives every turn of ``a`` and has
-    visited every value in 1..cover by the end.
+    visited every value in ``must`` (default 1..cover) by the end.
 
     A walk is the tuple (p_1, ..., p_N); p_0 = 0 is implicit.  Each p_n must be
     a positive integer, at most ``max_value`` if given, distinct from all
     earlier passcodes.
     """
     n_steps = len(a)
+    if must is None:
+        must = set(range(1, cover + 1))
     out: List[Walk] = []
     path: List[int] = []
     used: Set[int] = {0}
-    uncovered = cover  # number of values in 1..cover not yet visited
 
     def rec(pos: int, i: int, uncovered: int) -> None:
         if uncovered > n_steps - i:
@@ -109,11 +120,11 @@ def valid_walks(a: Sequence[int], max_value: Optional[int] = None, cover: int = 
                 continue
             used.add(nxt)
             path.append(nxt)
-            rec(nxt, i + 1, uncovered - (1 if nxt <= cover else 0))
+            rec(nxt, i + 1, uncovered - (1 if nxt in must else 0))
             path.pop()
             used.remove(nxt)
 
-    rec(0, 0, uncovered)
+    rec(0, 0, len(must))
     return out
 
 
@@ -275,8 +286,8 @@ class Result:
         ]
         if self.worst:
             a, nw = self.worst[0]
-            lines.append(f"  worst a for Ana: {list(a)}  (#walks={nw}; "
-                         f"{len(self.worst)} sequence(s) attain l*)")
+            count = f"{len(self.worst)}" if self.histogram else "at least 1"
+            lines.append(f"  worst a for Ana: {list(a)}  (#walks={nw}; {count} sequence(s) attain l*)")
             if self.schedule is not None:
                 sched = ", ".join(f"t{n}:{sorted(v)}" for n, v in sorted(self.schedule.items()))
                 lines.append(f"  optimal schedule vs it: {sched if sched else '(none needed)'}")
@@ -321,6 +332,321 @@ def solve(n_steps: int, first_turn: int = 2, cover: int = 0, max_value: Optional
 
 
 # ----------------------------------------------------------------------------
+# Spread certificate (sufficient condition for Bob) and local search over a
+# ----------------------------------------------------------------------------
+
+def spread_exact(walks: Sequence[Walk], first_turn: int = 2, guesses_per_turn: int = 1
+                 ) -> Fraction:
+    """Exact rational version of spread(); see there.  inf is represented by
+    Fraction(10**9) (an empty family)."""
+    if not walks:
+        return Fraction(10 ** 9)
+    n_steps = len(walks[0])
+    total = Fraction(0)
+    for n in range(first_turn, n_steps + 1):
+        counts = Counter(w[n - 1] for w in walks)
+        top = sorted(counts.values(), reverse=True)[:guesses_per_turn]
+        total += Fraction(sum(top), len(walks))
+    return total
+
+
+def spread(walks: Sequence[Walk], first_turn: int = 2, guesses_per_turn: int = 1) -> float:
+    """sum over turns n >= first_turn of the total mass of the ``guesses_per_turn``
+    most popular positions at turn n, under the uniform measure on ``walks``.
+
+    A value strictly below 1 (test it with spread_exact, the sum can be exactly
+    1 and floating point may round it below) certifies l*(a) > guesses_per_turn:
+    any schedule hits at most that fraction of the walks (THEORY.md, section 4).
+    Returns inf for an empty family (Ana wins with l = 0) and 0.0 when Ana never
+    gets a turn.
+    """
+    if not walks:
+        return float("inf")
+    return float(spread_exact(walks, first_turn, guesses_per_turn))
+
+
+def bob_beats(a: Sequence[int], guesses_per_turn: int, first_turn: int = 2, cover: int = 0,
+              max_value: Optional[int] = None, late_cover: int = 0) -> Tuple[bool, float, int]:
+    """(True iff l*(a) > guesses_per_turn, spread value, number of walks).
+
+    Uses the spread certificate first and falls back to the exact hitting-set
+    search when the certificate is inconclusive.
+    """
+    walks = valid_walks(a, max_value, must=must_set(a, first_turn, cover, late_cover))
+    if not walks:
+        return False, float("inf"), 0
+    sp = spread_exact(walks, first_turn, guesses_per_turn)
+    if sp < 1:
+        return True, float(sp), len(walks)
+    return find_schedule(walks, guesses_per_turn, first_turn) is None, float(sp), len(walks)
+
+
+def _grow_walk(prefix: List[int], n_steps: int, cover: int, steps_max: int, rng,
+               tries: int = 50, first_turn: int = 2, late_cover: int = 0) -> Optional[List[int]]:
+    """Randomly extend the walk ``prefix`` (positions p_1..p_i, p_0 = 0 implicit)
+    to length n_steps so that it visits 1..cover, using distinct steps in
+    1..steps_max; None if no attempt succeeds.
+
+    Greedy randomised construction: from the current position pick a random
+    unused step and direction leading to a fresh positive value, taking a
+    still-unvisited value of 1..cover whenever the remaining turns require it.
+    """
+    base_visited = {0, *prefix}
+    base_steps = {abs(b - a) for a, b in zip([0] + prefix[:-1], prefix)}
+    for _ in range(tries):
+        pos = prefix[-1] if prefix else 0
+        visited = set(base_visited)
+        used_steps = set(base_steps)
+        must = set(range(1, cover + 1)) - visited
+        walk = list(prefix)
+        ok = True
+        for i in range(len(prefix), n_steps):
+            if late_cover and i == first_turn - 1:
+                # the pre-guess prefix is now fixed, so the late targets are known
+                must |= must_set(steps_of(walk), first_turn, 0, late_cover) - visited
+            turns_left = n_steps - i
+            cands = []
+            for step in range(1, steps_max + 1):
+                if step in used_steps:
+                    continue
+                for v in (pos + step, pos - step):
+                    if v >= 1 and v not in visited:
+                        cands.append((step, v))
+            must_cands = [c for c in cands if c[1] in must]
+            if len(must) >= turns_left or (must_cands and rng.random() < 0.5):
+                cands = must_cands
+            if not cands:
+                ok = False
+                break
+            step, v = rng.choice(cands)
+            used_steps.add(step)
+            visited.add(v)
+            must.discard(v)
+            walk.append(v)
+            pos = v
+        if ok and not must:
+            return walk
+    return None
+
+
+def steps_of(walk: Sequence[int]) -> Tuple[int, ...]:
+    """Step sizes |p_n - p_{n-1}| of a walk given as positions p_1..p_N."""
+    return tuple(abs(b - a) for a, b in zip((0, *walk[:-1]), walk))
+
+
+def _walk_ok(walk: Sequence[int], cover: int, steps_max: int, first_turn: int = 2,
+             late_cover: int = 0) -> bool:
+    if len(set(walk)) != len(walk) or min(walk) < 1:
+        return False
+    st = steps_of(walk)
+    if len(set(st)) != len(st) or max(st) > steps_max:
+        return False
+    return must_set(st, first_turn, cover, late_cover) <= set(walk)
+
+
+def search_bob(n_steps: int, first_turn: int = 2, cover: int = 0, max_value: Optional[int] = None,
+               guesses_per_turn: int = 1, iterations: int = 2000, restarts: int = 4,
+               seed: int = 0, exact_every: int = 25, steps_max: Optional[int] = None,
+               late_cover: int = 0, verbose: bool = False) -> Dict[str, object]:
+    """Simulated annealing looking for a step sequence a Bob wins with against
+    ``guesses_per_turn`` guesses per turn (l*(a) > guesses_per_turn).
+
+    The sequence a is a permutation of 1..n_steps, or, with ``steps_max`` = B >
+    n_steps, any n_steps distinct integers in 1..B in any order (in the real
+    game Bob's first N steps are an arbitrary set of N distinct integers).
+
+    The annealing state is a *witness walk* (positions p_1..p_N visiting
+    1..cover with distinct steps <= B); a = steps_of(walk).  Every state is
+    therefore feasible.  Moves: resample one position, swap two positions, or
+    regrow a random suffix.  Objective: minimise spread(a).  Whenever the exact
+    spread drops below 1 the certificate applies; otherwise the exact
+    hitting-set test runs every ``exact_every`` accepted moves and on the best
+    state of each restart.  Returns a dict with the first verified sequence
+    found (``beats`` = True) or, failing that, the lowest-spread sequence.
+    """
+    import math
+    import random
+
+    if steps_max is None or steps_max < n_steps:
+        steps_max = n_steps
+    rng = random.Random(seed)
+    best_a: Optional[Tuple[int, ...]] = None
+    best_sp = float("inf")
+    best_walks = 0
+    found: Optional[Dict[str, object]] = None
+    t_start = time.perf_counter()
+
+    def evaluate(walk: Sequence[int]) -> Tuple[Fraction, List[Walk]]:
+        a = steps_of(walk)
+        walks = valid_walks(a, max_value, must=must_set(a, first_turn, cover, late_cover))
+        return spread_exact(walks, first_turn, guesses_per_turn), walks
+
+    def exact(walks: Sequence[Walk], sp: Fraction) -> bool:
+        return bool(walks) and (sp < 1 or find_schedule(walks, guesses_per_turn, first_turn) is None)
+
+    def neighbour(walk: List[int]) -> Optional[List[int]]:
+        w = walk[:]
+        move = rng.random()
+        if move < 0.4:
+            i = rng.randrange(n_steps)
+            prev = w[i - 1] if i else 0
+            nxt = w[i + 1] if i + 1 < n_steps else None
+            st = steps_of(w)
+            used = set(st) - {st[i]} - ({st[i + 1]} if nxt is not None else set())
+            options = []
+            for step in range(1, steps_max + 1):
+                if step in used:
+                    continue
+                for v in (prev + step, prev - step):
+                    if v < 1 or v in w:
+                        continue
+                    if nxt is not None:
+                        s2 = abs(nxt - v)
+                        if s2 == step or s2 in used or s2 > steps_max or s2 == 0:
+                            continue
+                    options.append(v)
+            if not options:
+                return None
+            w[i] = rng.choice(options)
+        elif move < 0.7:
+            i, j = rng.sample(range(n_steps), 2)
+            w[i], w[j] = w[j], w[i]
+        else:
+            i = rng.randrange(n_steps)
+            grown = _grow_walk(w[:i], n_steps, cover, steps_max, rng, tries=5,
+                               first_turn=first_turn, late_cover=late_cover)
+            if grown is None:
+                return None
+            w = grown
+        return w if _walk_ok(w, cover, steps_max, first_turn, late_cover) else None
+
+    for r in range(restarts):
+        if found:
+            break
+        walk = _grow_walk([], n_steps, cover, steps_max, rng, first_turn=first_turn,
+                          late_cover=late_cover)
+        if walk is None:
+            continue
+        cur, walks = evaluate(walk)
+        temp = 0.3
+        accepted = 0
+        for it in range(iterations):
+            w2 = neighbour(walk)
+            if w2 is None:
+                continue
+            sp2, walks2 = evaluate(w2)
+            if sp2 <= cur or rng.random() < math.exp(float(cur - sp2) / temp):
+                walk, cur, walks = w2, sp2, walks2
+                accepted += 1
+                if cur < best_sp:
+                    best_a, best_sp, best_walks = steps_of(walk), float(cur), len(walks)
+                if (cur < 1 or accepted % exact_every == 0) and exact(walks, cur):
+                    found = {"a": steps_of(walk), "spread": float(cur), "walks": len(walks), "beats": True}
+                    if verbose:
+                        print(f"  restart {r} it {it}: a={list(found['a'])} spread={float(cur):.3f} "
+                              f"#walks={len(walks)} beats l={guesses_per_turn}")
+                    break
+            temp = max(0.02, temp * 0.999)
+        if not found and best_a is not None:
+            w = valid_walks(best_a, max_value, must=must_set(best_a, first_turn, cover, late_cover))
+            if exact(w, spread_exact(w, first_turn, guesses_per_turn)):
+                found = {"a": best_a, "spread": best_sp, "walks": len(w), "beats": True}
+    result = found or {"a": best_a, "spread": best_sp, "walks": best_walks, "beats": False}
+    result["elapsed"] = time.perf_counter() - t_start
+    return result
+
+
+# ----------------------------------------------------------------------------
+# Explicit constructions (THEORY.md, section 9)
+# ----------------------------------------------------------------------------
+
+def _is_power_of_two(v: int) -> bool:
+    return v >= 1 and v & (v - 1) == 0
+
+
+def _is_lift_value(v: int) -> bool:
+    """True iff v = 3 * 4**m for some m >= 1 with m % 4 in {1, 2} (a lift step)."""
+    if v % 3:
+        return False
+    q, m = v // 3, 0
+    while q % 4 == 0:
+        q //= 4
+        m += 1
+    return q == 1 and m >= 1 and m % 4 in (1, 2)
+
+
+def is_free_turn(n: int) -> bool:
+    """Turns on which the no-coverage construction lets Bob choose the sign."""
+    return n % 4 == 0
+
+
+def no_cover_sequence(n_steps: int) -> Tuple[int, ...]:
+    """The first ``n_steps`` steps of the sequence of THEORY.md, Theorem 3.
+
+    Turn n uses: a power of two 2^0, 2^1, ... (in order) when n % 4 == 0 (the
+    *free* turns), the *lift* 3 * 4^n when n % 4 in {1, 2}, and the smallest
+    integer not yet used that is neither a power of two nor a lift value when
+    n % 4 == 3 (the *filler* turns, which eventually use every other integer).
+    Bob keeps the sign + on every non-free turn; the free signs are arbitrary.
+    Because the free steps are distinct powers of two, the 2^F sign choices
+    give 2^F distinct positions at every turn, so no schedule with l guesses
+    per turn hits more than l * sum_n 2^(-floor(n/4)) of them.
+    """
+    steps: List[int] = []
+    used: Set[int] = set()
+    power = 0
+    filler = 1
+    for n in range(1, n_steps + 1):
+        r = n % 4
+        if r == 0:
+            v = 2 ** power
+            power += 1
+        elif r in (1, 2):
+            v = 3 * 4 ** n
+        else:
+            while filler in used or _is_power_of_two(filler) or _is_lift_value(filler):
+                filler += 1
+            v = filler
+        used.add(v)
+        steps.append(v)
+    return tuple(steps)
+
+
+def forced_up_walks(a: Sequence[int]) -> List[Walk]:
+    """The walks for ``a`` that move upward on every non-free turn and either
+    way on the free turns: the family carrying Bob's measure in Theorem 3.
+    Only walks that are valid (positive, pairwise distinct positions) are
+    returned; for ``no_cover_sequence`` that is all 2^F of them."""
+    out: List[Walk] = []
+    path: List[int] = []
+    used: Set[int] = {0}
+
+    def rec(pos: int, i: int) -> None:
+        if i == len(a):
+            out.append(tuple(path))
+            return
+        step = a[i]
+        options = (pos + step, pos - step) if is_free_turn(i + 1) else (pos + step,)
+        for nxt in options:
+            if nxt < 1 or nxt in used:
+                continue
+            used.add(nxt)
+            path.append(nxt)
+            rec(nxt, i + 1)
+            path.pop()
+            used.remove(nxt)
+
+    rec(0, 0)
+    return out
+
+
+def no_cover_bound(first_turn: int, n_steps: int, guesses_per_turn: int = 1) -> Fraction:
+    """l * sum_{n = first_turn}^{n_steps} 2^(-floor(n/4)): the spread bound of Theorem 3."""
+    return sum((Fraction(guesses_per_turn, 2 ** (n // 4)) for n in range(first_turn, n_steps + 1)),
+               Fraction(0))
+
+
+# ----------------------------------------------------------------------------
 # CLI
 # ----------------------------------------------------------------------------
 
@@ -341,15 +667,75 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                     help="largest allowed passcode M (default: unbounded)")
     ap.add_argument("--full", action="store_true",
                     help="compute l*(a) for every a and print its distribution")
+    ap.add_argument("--search", type=int, default=None, metavar="L",
+                    help="instead of exhaustive search, run simulated annealing over a "
+                         "looking for a sequence Bob wins with against L guesses per turn")
+    ap.add_argument("--iterations", type=int, default=2000, help="annealing steps per restart")
+    ap.add_argument("--restarts", type=int, default=4)
+    ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--steps-max", type=int, default=None, metavar="B",
+                    help="with --search: a is any N distinct integers in 1..B (default B = N)")
+    ap.add_argument("--late-cover", type=int, default=0, metavar="K",
+                    help="with --search/--check: Bob must also visit the K smallest values "
+                         "beyond his reach before turn t0 (R+1..R+K, R = a_1+..+a_{t0-1})")
+    ap.add_argument("--check", type=str, default=None, metavar="A",
+                    help="comma-separated sequence a: report its walks, spread and l*(a)")
+    ap.add_argument("--construction", type=int, default=None, metavar="N",
+                    help="report the first N steps of the no-coverage sequence of THEORY.md "
+                         "Theorem 3 (K = 0): walks, spread of the forced-up family, bound, l*(a)")
     args = ap.parse_args(argv)
+    if args.construction is not None:
+        a = no_cover_sequence(args.construction)
+        family = forced_up_walks(a)
+        walks = valid_walks(a) if len(a) <= 14 else family  # all valid walks only when cheap
+        print(f"a = {list(a)}")
+        print(f"forced-up family = {len(family)} walks "
+              f"= 2^{sum(1 for n in range(1, len(a) + 1) if is_free_turn(n))}"
+              + (f"; all valid walks = {len(walks)}" if len(a) <= 14 else ""))
+        for t0 in args.t0:
+            parts = []
+            for l in (1, 2, 3):
+                sp = spread_exact(family, t0, l)
+                parts.append(f"l={l}: spread {float(sp):.3f} (bound {float(no_cover_bound(t0, len(a), l)):.3f})"
+                             f"{' BOB' if sp < 1 else ''}")
+            ell = min_guesses(walks, t0)[0] if len(a) <= 14 else None
+            print(f"  t0={t0}: " + "; ".join(parts) +
+                  (f"; exact l*(a) over all {len(walks)} valid walks = {ell}" if ell is not None else ""))
+        return 0
+    if args.check is not None:
+        a = _int_list(args.check)
+        for t0 in args.t0:
+            for k in args.cover:
+                must = must_set(a, t0, k, args.late_cover)
+                walks = valid_walks(a, args.max_value, must=must)
+                ell, sched = min_guesses(walks, t0)
+                sp = spread(walks, t0, 1)
+                print(f"a={a} t0={t0} K={k} late={args.late_cover} must={sorted(must)}: "
+                      f"#walks={len(walks)} spread(l=1)={sp:.3f} "
+                      f"l*(a)={'unbounded' if ell is None else ell}")
+                if sched:
+                    print("  schedule: " + ", ".join(f"t{n}:{sorted(v)}" for n, v in sorted(sched.items())))
+        return 0
     if (args.n is None) == (args.max_n is None):
         ap.error("give exactly one of --n / --max-n")
     ns = [args.n] if args.n is not None else list(range(1, args.max_n + 1))
     for n in ns:
         for t0 in args.t0:
             for k in args.cover:
-                res = solve(n, t0, k, args.max_value, args.full)
-                print(res.summary())
+                if args.search is not None:
+                    m = "inf" if args.max_value is None else str(args.max_value)
+                    best = search_bob(n, t0, k, args.max_value, args.search,
+                                      args.iterations, args.restarts, args.seed,
+                                      steps_max=args.steps_max, late_cover=args.late_cover)
+                    b = args.steps_max if args.steps_max and args.steps_max > n else n
+                    print(f"N={n} t0={t0} K={k} late={args.late_cover} M={m} steps<={b} "
+                          f"search vs l={args.search}: "
+                          f"{'BOB WINS' if best['beats'] else 'not found'}  "
+                          f"a={list(best['a']) if best['a'] else None} spread={best['spread']:.3f} "
+                          f"#walks={best['walks']} [{best['elapsed']:.1f}s]")
+                else:
+                    res = solve(n, t0, k, args.max_value, args.full)
+                    print(res.summary())
                 sys.stdout.flush()
     return 0
 

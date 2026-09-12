@@ -4,13 +4,23 @@ import itertools
 import unittest
 
 from passcode_solver import (
+    bob_beats,
     find_schedule,
+    forced_up_walks,
+    is_free_turn,
+    must_set,
+    no_cover_bound,
+    no_cover_sequence,
+    search_bob,
+    spread,
+    spread_exact,
     hits_all,
     min_guesses,
     sequences_with_walks,
     solve,
     valid_walks,
 )
+from sweep_window import concentration_profile, is_zigzag, window_walks
 
 
 def brute_force_walks(a, max_value=None, cover=0):
@@ -98,6 +108,29 @@ class WalkTests(unittest.TestCase):
             self.assertEqual(walks, [tuple(zig)])
 
 
+class LateCoverTests(unittest.TestCase):
+    def test_must_set(self):
+        self.assertEqual(must_set((3, 1, 2, 5), first_turn=3, cover=2, late_cover=2),
+                         {1, 2, 5, 6})                         # reach before turn 3 is 3+1 = 4
+        self.assertEqual(must_set((3, 1, 2, 5), first_turn=1, cover=0, late_cover=1), {1})
+
+    def test_valid_walks_with_must(self):
+        # a = (3,1,2,5): reach before turn 3 is 4, late target 5 must be visited
+        self.assertEqual(sorted(valid_walks((3, 1, 2, 5))),
+                         [(3, 2, 4, 9), (3, 4, 2, 7), (3, 4, 6, 1), (3, 4, 6, 11)])
+        self.assertEqual(valid_walks((3, 1, 2, 5), must={5}), [])
+        self.assertEqual(valid_walks((3, 1, 2, 5), must={1}), [(3, 4, 6, 1)])
+        self.assertEqual(sorted(valid_walks((3, 1, 2, 5), must={2, 4})), [(3, 2, 4, 9), (3, 4, 2, 7)])
+
+    def test_search_with_late_cover_respects_targets(self):
+        res = search_bob(8, first_turn=3, cover=0, guesses_per_turn=1,
+                         iterations=100, restarts=1, seed=3, steps_max=16, late_cover=1)
+        a = res["a"]
+        self.assertIsNotNone(a)
+        must = must_set(a, 3, 0, 1)
+        self.assertTrue(all(must <= set(w) for w in valid_walks(a, must=must)))
+
+
 class ScheduleTests(unittest.TestCase):
     def test_hand_examples(self):
         walks = [(3, 2, 4), (3, 4, 2), (3, 4, 6)]  # a = (3, 1, 2)
@@ -136,6 +169,46 @@ class ScheduleTests(unittest.TestCase):
                                          msg=f"a={a} t0={t0} K={cover}")
 
 
+class SpreadTests(unittest.TestCase):
+    def test_spread_values(self):
+        walks = [(3, 2, 4), (3, 4, 2), (3, 4, 6)]  # a = (3, 1, 2)
+        self.assertAlmostEqual(spread(walks, 1, 1), 1 + 2 / 3 + 1 / 3)   # turn 1 is certain
+        self.assertAlmostEqual(spread(walks, 2, 1), 1.0)
+        self.assertAlmostEqual(spread(walks, 2, 2), 1 + 2 / 3)
+        self.assertEqual(spread([], 2, 1), float("inf"))
+        self.assertEqual(spread(walks, 4, 1), 0.0)
+
+    def test_spread_exactly_one_is_not_a_certificate(self):
+        # a = (3,4,2,1,5), t0 = 3: spread is exactly 1/2 + 1/3 + 1/6 = 1 and Ana still wins
+        walks = valid_walks((3, 4, 2, 1, 5))
+        self.assertEqual(spread_exact(walks, 3, 1), 1)
+        self.assertEqual(spread(walks, 3, 1), 1.0)
+        self.assertLess(0.5 + 1 / 3 + 1 / 6, 1.0)          # naive float summation would round down
+        self.assertIsNotNone(find_schedule(walks, 1, 3))
+        self.assertFalse(bob_beats((3, 4, 2, 1, 5), 1, 3)[0])
+
+    def test_certificate_is_sound(self):
+        # spread < 1 must imply that the exact search finds no schedule
+        for n in range(3, 8):
+            for a, walks in sequences_with_walks(n):
+                for t0 in (2, 3, 4):
+                    if spread_exact(walks, t0, 1) < 1:
+                        self.assertIsNone(find_schedule(walks, 1, t0), msg=f"a={a} t0={t0}")
+                    beats, sp, nw = bob_beats(a, 1, t0)
+                    self.assertEqual(beats, min_guesses(walks, t0)[0] != 1 and nw > 0,
+                                     msg=f"a={a} t0={t0}")
+
+    def test_search_finds_verified_sequence(self):
+        res = search_bob(6, first_turn=3, cover=0, guesses_per_turn=1,
+                         iterations=400, restarts=3, seed=1)
+        self.assertTrue(res["beats"])                     # l*(6, t0=3) = 2 exhaustively
+        self.assertTrue(bob_beats(res["a"], 1, 3)[0])
+        res2 = search_bob(6, first_turn=3, cover=0, guesses_per_turn=1,
+                          iterations=40, restarts=1, seed=2, steps_max=12)
+        self.assertEqual(len(set(res2["a"])), 6)
+        self.assertTrue(all(1 <= v <= 12 for v in res2["a"]))
+
+
 class SolveTests(unittest.TestCase):
     def test_guessing_from_turn_one_is_trivial(self):
         for n in range(1, 6):
@@ -155,6 +228,68 @@ class SolveTests(unittest.TestCase):
         self.assertEqual(max(k for k in r.histogram if isinstance(k, int)), r.ell)
         r2 = solve(4)
         self.assertEqual(r2.ell, r.ell)
+
+
+class ConstructionTests(unittest.TestCase):
+    """THEORY.md, Theorem 3: the no-coverage sequence beats any fixed l."""
+
+    def test_sequence_shape(self):
+        a = no_cover_sequence(40)
+        self.assertEqual(len(set(a)), 40)
+        free = [a[n - 1] for n in range(1, 41) if is_free_turn(n)]
+        self.assertEqual(free, [2 ** k for k in range(10)])
+        lifts = [a[n - 1] for n in range(1, 41) if n % 4 in (1, 2)]
+        self.assertEqual(lifts, [3 * 4 ** n for n in range(1, 41) if n % 4 in (1, 2)])
+        fillers = [a[n - 1] for n in range(1, 41) if n % 4 == 3]
+        self.assertEqual(fillers, [3, 5, 6, 7, 9, 10, 11, 13, 14, 15])
+
+    def test_family_is_valid_and_spread_out(self):
+        for n in (12, 16, 20):
+            a = no_cover_sequence(n)
+            family = forced_up_walks(a)
+            f = sum(1 for t in range(1, n + 1) if is_free_turn(t))
+            self.assertEqual(len(family), 2 ** f)          # every sign choice is legal
+            for w in family:                                # positive and pairwise distinct
+                self.assertGreaterEqual(min(w), 1)
+                self.assertEqual(len(set(w)), n)
+            for t in range(1, n + 1):                       # 2^F(t) distinct positions at turn t
+                f_t = sum(1 for m in range(1, t + 1) if is_free_turn(m))
+                self.assertEqual(len({w[t - 1] for w in family}), 2 ** f_t)
+            for t0 in (n // 2, n - 3):
+                for l in (1, 2, 3):
+                    self.assertLessEqual(spread_exact(family, t0, l), no_cover_bound(t0, n, l))
+
+    def test_family_is_a_subfamily_of_valid_walks(self):
+        a = no_cover_sequence(12)
+        self.assertTrue(set(forced_up_walks(a)) <= set(valid_walks(a)))
+
+    def test_bob_beats_one_guess_at_n_12(self):
+        a = no_cover_sequence(12)
+        walks = valid_walks(a)
+        family = forced_up_walks(a)
+        self.assertLess(spread_exact(family, 9, 1), 1)      # certificate for l = 1, t0 = 9
+        self.assertIsNone(find_schedule(walks, 1, first_turn=9))
+        self.assertGreater(min_guesses(walks, 9)[0], 1)     # (it is 4 over all 64 valid walks)
+
+
+class SweepWindowTests(unittest.TestCase):
+    def test_tight_window_forces_the_zigzag(self):
+        for n in range(4, 15, 2):
+            walks = window_walks(n, n // 2)
+            self.assertEqual(len(walks), 2)
+            self.assertTrue(all(is_zigzag(w) for w in walks))
+            self.assertEqual(concentration_profile(walks), [0.5] * n)
+
+    def test_counts_depend_on_the_slack_only(self):
+        for slack, count in ((1, 6), (2, 16)):
+            for n in (12, 14, 16):
+                self.assertEqual(len(window_walks(n, n // 2 - slack)), count)
+
+    def test_walks_are_valid(self):
+        for w in window_walks(10, 3):
+            self.assertEqual(len(set(w) | {0}), 11)
+            self.assertEqual([abs(b - a) for a, b in zip((0,) + w[:-1], w)], list(range(1, 11)))
+            self.assertTrue(set(range(-3, 4)) <= set(w) | {0})
 
 
 if __name__ == "__main__":
