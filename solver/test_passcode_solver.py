@@ -4,7 +4,12 @@ import itertools
 import unittest
 
 from passcode_solver import (
+    bob_beats,
     find_schedule,
+    must_set,
+    search_bob,
+    spread,
+    spread_exact,
     hits_all,
     min_guesses,
     sequences_with_walks,
@@ -98,6 +103,29 @@ class WalkTests(unittest.TestCase):
             self.assertEqual(walks, [tuple(zig)])
 
 
+class LateCoverTests(unittest.TestCase):
+    def test_must_set(self):
+        self.assertEqual(must_set((3, 1, 2, 5), first_turn=3, cover=2, late_cover=2),
+                         {1, 2, 5, 6})                         # reach before turn 3 is 3+1 = 4
+        self.assertEqual(must_set((3, 1, 2, 5), first_turn=1, cover=0, late_cover=1), {1})
+
+    def test_valid_walks_with_must(self):
+        # a = (3,1,2,5): reach before turn 3 is 4, late target 5 must be visited
+        self.assertEqual(sorted(valid_walks((3, 1, 2, 5))),
+                         [(3, 2, 4, 9), (3, 4, 2, 7), (3, 4, 6, 1), (3, 4, 6, 11)])
+        self.assertEqual(valid_walks((3, 1, 2, 5), must={5}), [])
+        self.assertEqual(valid_walks((3, 1, 2, 5), must={1}), [(3, 4, 6, 1)])
+        self.assertEqual(sorted(valid_walks((3, 1, 2, 5), must={2, 4})), [(3, 2, 4, 9), (3, 4, 2, 7)])
+
+    def test_search_with_late_cover_respects_targets(self):
+        res = search_bob(8, first_turn=3, cover=0, guesses_per_turn=1,
+                         iterations=100, restarts=1, seed=3, steps_max=16, late_cover=1)
+        a = res["a"]
+        self.assertIsNotNone(a)
+        must = must_set(a, 3, 0, 1)
+        self.assertTrue(all(must <= set(w) for w in valid_walks(a, must=must)))
+
+
 class ScheduleTests(unittest.TestCase):
     def test_hand_examples(self):
         walks = [(3, 2, 4), (3, 4, 2), (3, 4, 6)]  # a = (3, 1, 2)
@@ -134,6 +162,46 @@ class ScheduleTests(unittest.TestCase):
                         self.assertEqual(min_guesses(walks, t0)[0],
                                          brute_force_min_guesses(walks, t0),
                                          msg=f"a={a} t0={t0} K={cover}")
+
+
+class SpreadTests(unittest.TestCase):
+    def test_spread_values(self):
+        walks = [(3, 2, 4), (3, 4, 2), (3, 4, 6)]  # a = (3, 1, 2)
+        self.assertAlmostEqual(spread(walks, 1, 1), 1 + 2 / 3 + 1 / 3)   # turn 1 is certain
+        self.assertAlmostEqual(spread(walks, 2, 1), 1.0)
+        self.assertAlmostEqual(spread(walks, 2, 2), 1 + 2 / 3)
+        self.assertEqual(spread([], 2, 1), float("inf"))
+        self.assertEqual(spread(walks, 4, 1), 0.0)
+
+    def test_spread_exactly_one_is_not_a_certificate(self):
+        # a = (3,4,2,1,5), t0 = 3: spread is exactly 1/2 + 1/3 + 1/6 = 1 and Ana still wins
+        walks = valid_walks((3, 4, 2, 1, 5))
+        self.assertEqual(spread_exact(walks, 3, 1), 1)
+        self.assertEqual(spread(walks, 3, 1), 1.0)
+        self.assertLess(0.5 + 1 / 3 + 1 / 6, 1.0)          # naive float summation would round down
+        self.assertIsNotNone(find_schedule(walks, 1, 3))
+        self.assertFalse(bob_beats((3, 4, 2, 1, 5), 1, 3)[0])
+
+    def test_certificate_is_sound(self):
+        # spread < 1 must imply that the exact search finds no schedule
+        for n in range(3, 8):
+            for a, walks in sequences_with_walks(n):
+                for t0 in (2, 3, 4):
+                    if spread_exact(walks, t0, 1) < 1:
+                        self.assertIsNone(find_schedule(walks, 1, t0), msg=f"a={a} t0={t0}")
+                    beats, sp, nw = bob_beats(a, 1, t0)
+                    self.assertEqual(beats, min_guesses(walks, t0)[0] != 1 and nw > 0,
+                                     msg=f"a={a} t0={t0}")
+
+    def test_search_finds_verified_sequence(self):
+        res = search_bob(6, first_turn=3, cover=0, guesses_per_turn=1,
+                         iterations=400, restarts=3, seed=1)
+        self.assertTrue(res["beats"])                     # l*(6, t0=3) = 2 exhaustively
+        self.assertTrue(bob_beats(res["a"], 1, 3)[0])
+        res2 = search_bob(6, first_turn=3, cover=0, guesses_per_turn=1,
+                          iterations=40, restarts=1, seed=2, steps_max=12)
+        self.assertEqual(len(set(res2["a"])), 6)
+        self.assertTrue(all(1 <= v <= 12 for v in res2["a"]))
 
 
 class SolveTests(unittest.TestCase):
