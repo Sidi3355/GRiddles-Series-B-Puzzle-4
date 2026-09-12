@@ -170,3 +170,175 @@ Against: every finite instance with two unreachable targets so far.  Deciding
 it needs either an explicit a with an uncountable family of covering walks
 that dodges every one-guess schedule (sections 3 to 6 constrain its shape) or
 an Ana argument that turns "two unreachable targets" into a schedule.
+
+## 8. What one guess forbids
+
+A guess x on turn n hits exactly the walks with p_n = x. Seen from a value V
+that Bob visits at time t (so p_{t-1} = V -+ a_t and p_{t+1} = V +- a_{t+1}),
+the visit is caught by any of
+
+    (t, V)                        the *direct* guard, usable once per V,
+    (t-1, V + a_t)                the *arrival guard* (arrival from above),
+    (t-1, V - a_t)                arrival from below, only possible if a_t < V,
+    (t+1, V + a_{t+1})            the *departure guard* (upward departure),
+    (t+1, V - a_{t+1})            downward departure, only possible if a_{t+1} < V.
+
+Theorem 2 is the schedule that plays both departure guards at every turn. With
+one guess per turn Ana has to choose. Two facts about a single target V > S_T
+(S_T = a_1 + ... + a_T), writing D = {n > T : a_n < V} for the finitely many
+turns on which a downward move from V is possible:
+
+* *Modes.* Write E_n = V + a_n. Besides V itself (usable once), the guard
+  E_n protects the visit at time n-1 when guessed on turn n (departure) and
+  the visit at time n when guessed on turn n-1 (arrival). Guessing E_n on
+  turn n and E_{n+1} on turn n would take two guesses on one turn, so a
+  schedule built from the guards of V is in *arrival mode* (g_n = E_{n+1})
+  up to some pivot turn s and in *departure mode* (g_n = E_n) after it, and
+  whenever the arrival mode is non-empty the visit at time T+1 can only be
+  guarded by V on turn T+1 (there is no turn T). Bob escapes such a schedule
+  by a visit at a time t <= s in D arriving from below (p_{t-1} = V - a_t),
+  or by a visit at a time n-1 > s with n in D leaving downward
+  (p_n = V - a_n), and in pure departure mode V can plug only one such
+  downward fork. Hence if Bob can leave V downward at two turns n_1 < n_2 of
+  D and can arrive at V from below at some turn t <= n_2 - 1 of D, all inside
+  covering walks, then no schedule built from the guards of V hits every
+  walk. This is the precise form of section 6 and the reason the second
+  guess of Theorem 2 cannot simply be dropped.
+* *Parity.* p_n = a_1 + ... + a_n (mod 2), so on turn n only values of one
+  parity can be positions. Departure guards of two targets of opposite parity
+  (V and V+1, say) therefore never compete for the same turn: one guess per
+  turn already runs departure mode for both. The obstruction is not the
+  number of targets but the downward departures, which need a_n < V and are
+  plentiful because Bob may use the S_T - T integers below V that the hidden
+  phase did not use.
+
+Ana's schedules are of course not restricted to guards of one or two targets,
+so this only shows which natural strategies fail, not that all do.
+
+## 9. Theorem 3: without the covering condition there is no finite l
+
+The covering condition is what makes Theorem 2 work: it supplies one value
+Bob is forced to visit. The next theorem shows it is essential.
+
+**Theorem 3.** Consider the *survival variant*, in which Bob wins iff the
+game goes on forever (no covering condition). For every l >= 1 and every
+T with 2^(floor((T+1)/4)) > 8 l (in particular for l = 1 and T >= 15, and for
+every l < 2^(floor((T+1)/4) - 3)), Bob has a sequence a against which no
+schedule with l guesses per turn hits every valid walk.
+
+*Construction.* Number the turns n = 1, 2, 3, ... and let
+
+    turn n = 0 (mod 4)      free turn:    a_n = 2^(n/4 - 1)      (1, 2, 4, 8, ...),
+    turn n = 1, 2 (mod 4)   lift turn:    a_n = 3 * 4^n,
+    turn n = 3 (mod 4)      filler turn:  a_n = the smallest positive integer not
+                            used before that is neither a power of two nor of the
+                            form 3 * 4^m with m = 1, 2 (mod 4).
+
+Every positive integer occurs exactly once (powers of two on the free turns,
+the reserved values 3 * 4^m on the lift turns, every other integer on some
+filler turn because only finitely many integers precede it). Bob's family W
+of walks: sign + on every lift and filler turn, either sign on every free
+turn; mu is the uniform (product) measure on the free signs.
+
+*Validity.* Write p_n = C_n + X_n with C_n the sum of the lift and filler steps
+up to turn n and X_n the signed sum of the free steps. X_n is a signed sum of
+distinct powers of two, so |X_n| <= 2^F(n) - 1 with F(n) = floor(n/4), and X_n
+determines its signs. Positivity: C_n >= 12 > |X_n| for n <= 4 and C_n >=
+3 * 4^(n-2) > 2^(n/4) > |X_n| for n >= 2. Distinctness along a walk: for m < n
+the window (m, n] contains a lift turn c >= n-2 unless it is a single turn
+(sum +-a ≠ 0) or the pair {4k-1, 4k} (sum b +- 2^(k-1) ≠ 0 because the filler b
+is not a power of two); in the first case p_n - p_m >= 3 * 4^c - 2 * 2^F(n) > 0.
+So every one of the 2^F(n) sign choices gives a valid walk, and at every turn n
+the walks of W occupy 2^F(n) distinct positions, each of mu-mass 2^(-F(n)).
+
+*Spread.* For a schedule G with |G_n| <= l,
+
+    mu(some guess is correct) <= sum_{n > T} sum_{x in G_n} mu(p_n = x)
+                              <= l * sum_{n > T} 2^(-floor(n/4))
+                              <= 8 l * 2^(-floor((T+1)/4)) < 1,
+
+so some walk of W is never guessed and never gets stuck: Bob wins. QED.
+
+Remarks. (i) The answer of the survival variant depends on T: with T = 0 Ana
+wins with one guess (p_1 = a_1), with T >= 15 no fixed l works. (ii) The
+construction is the pure form of section 4: hidden fine offsets (the powers
+of two before turn T) give the 2^(-F(T)) factor and the continuing free turns
+give the geometric decay; no coverage is possible for this family, because a
+branch's offset modulo 2^k is frozen after its k-th free turn, so a far dip
+(one large step taking all branches into a block of small values) always puts
+the same branch on the same residue of every block, while covering would
+require every branch to visit every value of the block. (iii) `python3
+solver/passcode_solver.py --construction N --t0 t0` prints the first N steps,
+the exact spread of the family (it equals the bound, the positions being
+distinct) and, for N <= 14, the exact l*(a) over *all* valid walks; e.g. at
+N = 12, t0 = 9 the family has spread 0.875 and l*(a) = 4 (the extra downward
+moves on filler turns help Bob further in the finite game).
+
+Theorem 2 and Theorem 3 together locate the whole difficulty of the puzzle in
+the interaction between spread (section 4) and coverage.
+
+## 10. Coverage versus spread
+
+Theorem 3 also clarifies how much branching Bob needs. If mu is a measure on
+covering walks with max_v mu(p_n = v) <= c n^(-1-eps) for n > T, then the sum
+of section 4 is at most c' T^(-eps) < 1 once T is large; with the hidden phase
+supplying a factor 2^(-K), a *logarithmic* number of binary choices by time n
+already suffices. So the question is not the rate of branching but whether a
+family of covering walks can branch forever at all without its branches
+re-merging in (time, position).
+
+*Local rigidity.* Where the branching cannot come from: `solver/sweep_window.py`
+enumerates the walks with steps 1, 2, ..., N (in order) from a huge start that
+visit every value within distance m of the start by time N (the local picture
+of a covering walk with growing steps, positivity being irrelevant). The count
+depends only on the slack s = N - 2m, not on N:
+
+    slack s      0   1    2    3      4        5        6
+    #walks       2   6   16   ~50   ~120     ~330    ~1000      (N = 10..24)
+
+With s = 0 the only walks are the zig-zags 0, +1, -1, +2, -2, ... and their
+mirror image, and the family's concentration is 1/2 at every turn. Sweeping
+an interval is deterministic; the freedom (about 3 per unit of slack) lies in
+the excursions outside it, and every excursion is a value that some later
+sweep, with larger steps, must work around.
+
+*Formation walks.* The natural way to reconcile the two is to keep Bob's
+branches in *formation*: branch epsilon in {+-1}^k sits at P(n) + sum_i
+epsilon_i u_i(n), all branches sweep translated copies of the same interval
+with the same steps (rigidity is harmless: the sweep is common), and between
+sweeps the formation is reshaped by signed transitions, a step u used with the
+sign epsilon_i by branch epsilon changing the offset u_i by +-u for every
+branch at once (the two-branch case is the swap gadget 3, 1, 2 of phase 1:
+P + u -> P' + u -> P' - u and P - u -> P' - u -> P' + u with the steps
+|P' - P| and 2u). In formation the positions at any time are distinct across
+branches, so the spread condition holds automatically with F(n) = k(n) free
+transitions. What is *not* automatic is coverage: a sweep around the low lane
+L covers L, L-1, ..., L-m+1 and the high lane L + s, ..., L + s + m - 1, and
+leaves the gap between them; branch epsilon's lanes are those of the common
+skeleton shifted by sum epsilon_i u_i(n), so every branch must eventually
+sweep every interval of every other branch. This is a scheduling problem on
+intervals (which interval does each branch sweep in each round, with the
+constraint that all branches use the same steps), and it is the concrete open
+problem left by this phase:
+
+    Formation problem. Find offsets u_i(n), a skeleton P(n) and a sequence
+    of intervals such that (a) all branches' sweeps and transitions are
+    legal with one common step sequence a that is a permutation of the
+    positive integers, and (b) for every epsilon the union of branch
+    epsilon's low and high lanes is the whole of the positive integers.
+
+A solution gives the answer 2; a proof that no formation (or no family at
+all) can satisfy (b) would be the heart of an Ana argument for the answer 1.
+
+## 11. Status after phase 3
+
+* Answer is 1 or 2 (Theorem 2; formalised in `lean/Passcode/TwoGuesses.lean`).
+* Without coverage the answer would be "no finite l" for T >= 15 (Theorem 3),
+  so any Ana argument for 1 must use coverage beyond the single forced visit
+  of Theorem 2, and any Bob construction for 2 must solve the formation
+  problem (or something equivalent) rather than just spread out.
+* Conjecture unchanged (2, weakly): the formation mechanism supplies spread
+  for free, and the requirement it leaves, a schedule of sweeps in which
+  every branch eventually sweeps every interval, looks like a design problem
+  rather than an impossibility; but it has resisted a quick solution and the
+  finite experiments with two unreachable targets still all favour Ana.

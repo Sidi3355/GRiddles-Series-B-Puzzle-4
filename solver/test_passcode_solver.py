@@ -6,7 +6,11 @@ import unittest
 from passcode_solver import (
     bob_beats,
     find_schedule,
+    forced_up_walks,
+    is_free_turn,
     must_set,
+    no_cover_bound,
+    no_cover_sequence,
     search_bob,
     spread,
     spread_exact,
@@ -16,6 +20,7 @@ from passcode_solver import (
     solve,
     valid_walks,
 )
+from sweep_window import concentration_profile, is_zigzag, window_walks
 
 
 def brute_force_walks(a, max_value=None, cover=0):
@@ -223,6 +228,68 @@ class SolveTests(unittest.TestCase):
         self.assertEqual(max(k for k in r.histogram if isinstance(k, int)), r.ell)
         r2 = solve(4)
         self.assertEqual(r2.ell, r.ell)
+
+
+class ConstructionTests(unittest.TestCase):
+    """THEORY.md, Theorem 3: the no-coverage sequence beats any fixed l."""
+
+    def test_sequence_shape(self):
+        a = no_cover_sequence(40)
+        self.assertEqual(len(set(a)), 40)
+        free = [a[n - 1] for n in range(1, 41) if is_free_turn(n)]
+        self.assertEqual(free, [2 ** k for k in range(10)])
+        lifts = [a[n - 1] for n in range(1, 41) if n % 4 in (1, 2)]
+        self.assertEqual(lifts, [3 * 4 ** n for n in range(1, 41) if n % 4 in (1, 2)])
+        fillers = [a[n - 1] for n in range(1, 41) if n % 4 == 3]
+        self.assertEqual(fillers, [3, 5, 6, 7, 9, 10, 11, 13, 14, 15])
+
+    def test_family_is_valid_and_spread_out(self):
+        for n in (12, 16, 20):
+            a = no_cover_sequence(n)
+            family = forced_up_walks(a)
+            f = sum(1 for t in range(1, n + 1) if is_free_turn(t))
+            self.assertEqual(len(family), 2 ** f)          # every sign choice is legal
+            for w in family:                                # positive and pairwise distinct
+                self.assertGreaterEqual(min(w), 1)
+                self.assertEqual(len(set(w)), n)
+            for t in range(1, n + 1):                       # 2^F(t) distinct positions at turn t
+                f_t = sum(1 for m in range(1, t + 1) if is_free_turn(m))
+                self.assertEqual(len({w[t - 1] for w in family}), 2 ** f_t)
+            for t0 in (n // 2, n - 3):
+                for l in (1, 2, 3):
+                    self.assertLessEqual(spread_exact(family, t0, l), no_cover_bound(t0, n, l))
+
+    def test_family_is_a_subfamily_of_valid_walks(self):
+        a = no_cover_sequence(12)
+        self.assertTrue(set(forced_up_walks(a)) <= set(valid_walks(a)))
+
+    def test_bob_beats_one_guess_at_n_12(self):
+        a = no_cover_sequence(12)
+        walks = valid_walks(a)
+        family = forced_up_walks(a)
+        self.assertLess(spread_exact(family, 9, 1), 1)      # certificate for l = 1, t0 = 9
+        self.assertIsNone(find_schedule(walks, 1, first_turn=9))
+        self.assertGreater(min_guesses(walks, 9)[0], 1)     # (it is 4 over all 64 valid walks)
+
+
+class SweepWindowTests(unittest.TestCase):
+    def test_tight_window_forces_the_zigzag(self):
+        for n in range(4, 15, 2):
+            walks = window_walks(n, n // 2)
+            self.assertEqual(len(walks), 2)
+            self.assertTrue(all(is_zigzag(w) for w in walks))
+            self.assertEqual(concentration_profile(walks), [0.5] * n)
+
+    def test_counts_depend_on_the_slack_only(self):
+        for slack, count in ((1, 6), (2, 16)):
+            for n in (12, 14, 16):
+                self.assertEqual(len(window_walks(n, n // 2 - slack)), count)
+
+    def test_walks_are_valid(self):
+        for w in window_walks(10, 3):
+            self.assertEqual(len(set(w) | {0}), 11)
+            self.assertEqual([abs(b - a) for a, b in zip((0,) + w[:-1], w)], list(range(1, 11)))
+            self.assertTrue(set(range(-3, 4)) <= set(w) | {0})
 
 
 if __name__ == "__main__":

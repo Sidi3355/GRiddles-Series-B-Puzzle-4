@@ -557,6 +557,96 @@ def search_bob(n_steps: int, first_turn: int = 2, cover: int = 0, max_value: Opt
 
 
 # ----------------------------------------------------------------------------
+# Explicit constructions (THEORY.md, section 9)
+# ----------------------------------------------------------------------------
+
+def _is_power_of_two(v: int) -> bool:
+    return v >= 1 and v & (v - 1) == 0
+
+
+def _is_lift_value(v: int) -> bool:
+    """True iff v = 3 * 4**m for some m >= 1 with m % 4 in {1, 2} (a lift step)."""
+    if v % 3:
+        return False
+    q, m = v // 3, 0
+    while q % 4 == 0:
+        q //= 4
+        m += 1
+    return q == 1 and m >= 1 and m % 4 in (1, 2)
+
+
+def is_free_turn(n: int) -> bool:
+    """Turns on which the no-coverage construction lets Bob choose the sign."""
+    return n % 4 == 0
+
+
+def no_cover_sequence(n_steps: int) -> Tuple[int, ...]:
+    """The first ``n_steps`` steps of the sequence of THEORY.md, Theorem 3.
+
+    Turn n uses: a power of two 2^0, 2^1, ... (in order) when n % 4 == 0 (the
+    *free* turns), the *lift* 3 * 4^n when n % 4 in {1, 2}, and the smallest
+    integer not yet used that is neither a power of two nor a lift value when
+    n % 4 == 3 (the *filler* turns, which eventually use every other integer).
+    Bob keeps the sign + on every non-free turn; the free signs are arbitrary.
+    Because the free steps are distinct powers of two, the 2^F sign choices
+    give 2^F distinct positions at every turn, so no schedule with l guesses
+    per turn hits more than l * sum_n 2^(-floor(n/4)) of them.
+    """
+    steps: List[int] = []
+    used: Set[int] = set()
+    power = 0
+    filler = 1
+    for n in range(1, n_steps + 1):
+        r = n % 4
+        if r == 0:
+            v = 2 ** power
+            power += 1
+        elif r in (1, 2):
+            v = 3 * 4 ** n
+        else:
+            while filler in used or _is_power_of_two(filler) or _is_lift_value(filler):
+                filler += 1
+            v = filler
+        used.add(v)
+        steps.append(v)
+    return tuple(steps)
+
+
+def forced_up_walks(a: Sequence[int]) -> List[Walk]:
+    """The walks for ``a`` that move upward on every non-free turn and either
+    way on the free turns: the family carrying Bob's measure in Theorem 3.
+    Only walks that are valid (positive, pairwise distinct positions) are
+    returned; for ``no_cover_sequence`` that is all 2^F of them."""
+    out: List[Walk] = []
+    path: List[int] = []
+    used: Set[int] = {0}
+
+    def rec(pos: int, i: int) -> None:
+        if i == len(a):
+            out.append(tuple(path))
+            return
+        step = a[i]
+        options = (pos + step, pos - step) if is_free_turn(i + 1) else (pos + step,)
+        for nxt in options:
+            if nxt < 1 or nxt in used:
+                continue
+            used.add(nxt)
+            path.append(nxt)
+            rec(nxt, i + 1)
+            path.pop()
+            used.remove(nxt)
+
+    rec(0, 0)
+    return out
+
+
+def no_cover_bound(first_turn: int, n_steps: int, guesses_per_turn: int = 1) -> Fraction:
+    """l * sum_{n = first_turn}^{n_steps} 2^(-floor(n/4)): the spread bound of Theorem 3."""
+    return sum((Fraction(guesses_per_turn, 2 ** (n // 4)) for n in range(first_turn, n_steps + 1)),
+               Fraction(0))
+
+
+# ----------------------------------------------------------------------------
 # CLI
 # ----------------------------------------------------------------------------
 
@@ -590,7 +680,28 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                          "beyond his reach before turn t0 (R+1..R+K, R = a_1+..+a_{t0-1})")
     ap.add_argument("--check", type=str, default=None, metavar="A",
                     help="comma-separated sequence a: report its walks, spread and l*(a)")
+    ap.add_argument("--construction", type=int, default=None, metavar="N",
+                    help="report the first N steps of the no-coverage sequence of THEORY.md "
+                         "Theorem 3 (K = 0): walks, spread of the forced-up family, bound, l*(a)")
     args = ap.parse_args(argv)
+    if args.construction is not None:
+        a = no_cover_sequence(args.construction)
+        family = forced_up_walks(a)
+        walks = valid_walks(a) if len(a) <= 14 else family  # all valid walks only when cheap
+        print(f"a = {list(a)}")
+        print(f"forced-up family = {len(family)} walks "
+              f"= 2^{sum(1 for n in range(1, len(a) + 1) if is_free_turn(n))}"
+              + (f"; all valid walks = {len(walks)}" if len(a) <= 14 else ""))
+        for t0 in args.t0:
+            parts = []
+            for l in (1, 2, 3):
+                sp = spread_exact(family, t0, l)
+                parts.append(f"l={l}: spread {float(sp):.3f} (bound {float(no_cover_bound(t0, len(a), l)):.3f})"
+                             f"{' BOB' if sp < 1 else ''}")
+            ell = min_guesses(walks, t0)[0] if len(a) <= 14 else None
+            print(f"  t0={t0}: " + "; ".join(parts) +
+                  (f"; exact l*(a) over all {len(walks)} valid walks = {ell}" if ell is not None else ""))
+        return 0
     if args.check is not None:
         a = _int_list(args.check)
         for t0 in args.t0:
